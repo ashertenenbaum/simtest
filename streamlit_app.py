@@ -64,7 +64,7 @@ def load_matches(p: Path):
         df.insert(0, "MatchID", range(1, len(df) + 1))
     return df
 
-# ---------- load assets ----------
+# load assets
 try:
     model   = load_model(MODEL_PATH)
     matches = load_matches(DATA_PATH)
@@ -80,10 +80,20 @@ for c in matches.columns:
 model_feats  = getattr(model, "feature_names_in_", None) or getattr(model, "feature_names", None)
 feature_cols = [c for c in matches.columns if c in model_feats]
 
-# ---------- sidebar ----------
+# sidebar
 st.sidebar.header("Choose Fixture")
 labels = [f"{r['HomeTeam_clean']} vs {r['AwayTeam_clean']}" for _, r in matches.iterrows()]
 idx    = st.sidebar.selectbox("Match", range(len(labels)), format_func=lambda i: labels[i])
+
+# advanced options toggle
+show_adv = st.sidebar.checkbox("Advanced Options")
+custom_stats = {}
+if show_adv:
+    st.sidebar.subheader("Custom Match Stats")
+    # generate default stats from simulate_stats for input defaults
+    defaults = simulate_match_stats(matches.iloc[idx])
+    for stat, val in defaults.items():
+        custom_stats[stat] = st.sidebar.number_input(stat.replace('_', ' ').title(), value=val)
 
 if st.sidebar.button("Simulate & Predict", type="primary"):
     row = matches.iloc[idx]
@@ -104,7 +114,7 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
     winner_txt = {2: row["HomeTeam_clean"], 1: "Draw", 0: row["AwayTeam_clean"]}[pred_idx]
     st.subheader(f"🏆 Predicted Winner: **{winner_txt}**")
 
-    # show crests (same height for neat alignment)
+    # display crests
     left, right = st.columns(2)
     for side, col in zip(["HomeTeam_clean", "AwayTeam_clean"], [left, right]):
         logo_file = LOGO_DIR / f"{row[side]}.png"
@@ -124,7 +134,7 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
         ax.text(p + 0.02, bar.get_y() + bar.get_height() / 2, f"{p:.1%}", va="center")
     st.pyplot(fig)
 
-    # SHAP (may fail depending on model)
+    # SHAP feature impact
     st.subheader("🔍 SHAP Feature Impact")
     import shap
     try:
@@ -134,10 +144,14 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
     except Exception as e:
         st.info(f"SHAP not supported for this model: {e}")
 
-    # simulated stats
-    st.subheader("🎮 Simulated Match Stats")
-    sim_stats = simulate_match_stats(row)
-    stats_df  = pd.DataFrame([sim_stats])
+    # simulated or custom stats
+    st.subheader("🎮 Match Stats")
+    if show_adv and custom_stats:
+        stats = custom_stats
+        st.info("Showing your custom stats")
+    else:
+        stats = simulate_match_stats(row)
+    stats_df  = pd.DataFrame([stats])
     st.dataframe(stats_df, use_container_width=True)
 
     # download report
@@ -146,7 +160,7 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
         "HomeWinProb" : probas[2],
         "DrawProb"    : probas[1],
         "AwayWinProb" : probas[0],
-        **sim_stats
+        **stats
     }
     csv_bytes = pd.DataFrame([full_row]).to_csv(index=False).encode()
     st.download_button("⬇️ Download CSV Report", csv_bytes,
