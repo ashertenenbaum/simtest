@@ -11,11 +11,9 @@ from simulate_stats import simulate_match_stats
 def _patch_sklearn_internals():
     import sklearn, packaging.version as _pkg
 
-    # missing helper used by joblib timing
     if not hasattr(sklearn.utils, "_print_elapsed_time"):
-        sklearn.utils._print_elapsed_time = lambda *a, **k: None        # noqa
+        sklearn.utils._print_elapsed_time = lambda *a, **k: None
 
-    # used by imblearn/_smote
     if not hasattr(sklearn.utils, "_get_column_indices"):
         def _get_column_indices(X, key):
             if isinstance(key, slice):
@@ -23,24 +21,21 @@ def _patch_sklearn_internals():
             if isinstance(key, (list, tuple, np.ndarray)):
                 return np.array(key)
             return np.array([key])
-        sklearn.utils._get_column_indices = _get_column_indices          # noqa
+        sklearn.utils._get_column_indices = _get_column_indices
 
-    # used by imblearn/base
     if not hasattr(sklearn.utils, "parse_version"):
-        sklearn.utils.parse_version = _pkg.parse                         # noqa
+        sklearn.utils.parse_version = _pkg.parse
 
-    # used by pycaret-pickled pipelines
     try:
         scorer_mod = importlib.import_module("sklearn.metrics._scorer")
         if not hasattr(scorer_mod, "_Scorer"):
             class _Scorer: ...
-            scorer_mod._Scorer = _Scorer                                # noqa
+            scorer_mod._Scorer = _Scorer
     except ModuleNotFoundError:
         pass
 
-    # some very old pickles look for this
     if not hasattr(sklearn.utils, "_metadata_requests"):
-        sklearn.utils._metadata_requests = None                          # noqa
+        sklearn.utils._metadata_requests = None
 
 _patch_sklearn_internals()
 # ------------------------------------------------------------------
@@ -64,7 +59,6 @@ def load_matches(p: Path):
         df.insert(0, "MatchID", range(1, len(df) + 1))
     return df
 
-# load assets
 try:
     model   = load_model(MODEL_PATH)
     matches = load_matches(DATA_PATH)
@@ -72,7 +66,6 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-# ensure date columns really are datetime
 for c in matches.columns:
     if "date" in c.lower() and not np.issubdtype(matches[c].dtype, np.datetime64):
         matches[c] = pd.to_datetime(matches[c], errors="coerce")
@@ -80,20 +73,23 @@ for c in matches.columns:
 model_feats  = getattr(model, "feature_names_in_", None) or getattr(model, "feature_names", None)
 feature_cols = [c for c in matches.columns if c in model_feats]
 
-# sidebar
 st.sidebar.header("Choose Fixture")
 labels = [f"{r['HomeTeam_clean']} vs {r['AwayTeam_clean']}" for _, r in matches.iterrows()]
 idx    = st.sidebar.selectbox("Match", range(len(labels)), format_func=lambda i: labels[i])
 
-# advanced options toggle
 show_adv = st.sidebar.checkbox("Advanced Options")
 custom_stats = {}
+user_inputted_stats = {}
+
 if show_adv:
     st.sidebar.subheader("Custom Match Stats")
-    # generate default stats from simulate_stats for input defaults
-    defaults = simulate_match_stats(matches.iloc[idx])
-    for stat, val in defaults.items():
-        custom_stats[stat] = st.sidebar.number_input(stat.replace('_', ' ').title(), value=val)
+    if "__custom_defaults__" not in st.session_state or st.session_state.__custom_defaults_idx != idx:
+        st.session_state.__custom_defaults__ = simulate_match_stats(matches.iloc[idx])
+        st.session_state.__custom_defaults_idx = idx
+
+    for stat, val in st.session_state.__custom_defaults__.items():
+        user_inputted_stats[stat] = st.sidebar.number_input(stat.replace('_', ' ').title(), value=val)
+    custom_stats = user_inputted_stats.copy()
 
 if st.sidebar.button("Simulate & Predict", type="primary"):
     row = matches.iloc[idx]
@@ -106,7 +102,6 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
                 X[c] = pd.to_datetime(X[c], errors="coerce")
         probas = model.predict_proba(X)[0]
 
-    # add tiny noise so every run differs a bit
     probas = np.clip(probas + np.random.normal(0, 0.01, probas.shape), 0, None)
     probas = probas / probas.sum()
 
@@ -114,7 +109,6 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
     winner_txt = {2: row["HomeTeam_clean"], 1: "Draw", 0: row["AwayTeam_clean"]}[pred_idx]
     st.subheader(f"🏆 Predicted Winner: **{winner_txt}**")
 
-    # display crests
     left, right = st.columns(2)
     for side, col in zip(["HomeTeam_clean", "AwayTeam_clean"], [left, right]):
         logo_file = LOGO_DIR / f"{row[side]}.png"
@@ -126,7 +120,6 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
         else:
             col.markdown(f"**{row[side]}**")
 
-    # probability bar
     fig, ax = plt.subplots(figsize=(6, 4))
     bars = ax.barh(list(CLASS_MAP.values()), probas)
     ax.set_xlim(0, 1)
@@ -134,7 +127,6 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
         ax.text(p + 0.02, bar.get_y() + bar.get_height() / 2, f"{p:.1%}", va="center")
     st.pyplot(fig)
 
-    # SHAP feature impact
     st.subheader("🔍 SHAP Feature Impact")
     import shap
     try:
@@ -144,7 +136,6 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
     except Exception as e:
         st.info(f"SHAP not supported for this model: {e}")
 
-    # simulated or custom stats
     st.subheader("🎮 Match Stats")
     if show_adv and custom_stats:
         stats = custom_stats
@@ -154,7 +145,6 @@ if st.sidebar.button("Simulate & Predict", type="primary"):
     stats_df  = pd.DataFrame([stats])
     st.dataframe(stats_df, use_container_width=True)
 
-    # download report
     full_row = {
         "Winner"      : winner_txt,
         "HomeWinProb" : probas[2],
